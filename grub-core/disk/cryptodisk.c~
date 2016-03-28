@@ -1121,6 +1121,7 @@ grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
 	  return GRUB_ERR_NONE;
 	}
 
+<<<<<<< HEAD
       if (state[7].set) /* Plain mode */
         {
           char *cipher;
