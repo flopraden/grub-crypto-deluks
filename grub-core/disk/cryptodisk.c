@@ -51,6 +51,7 @@ static const struct grub_arg_option options[] =
     {"offset", 'o', 0, N_("Plain mode data sector offset"), 0, ARG_TYPE_INT},
     {"size", 's', 0, N_("Size of raw device (sectors, defaults to whole device)"), 0, ARG_TYPE_INT},
     {"key-size", 'K', 0, N_("Set key size (bits)"), 0, ARG_TYPE_INT},
+    {"deniable", 'x', 0, N_("Deniable mode (deniale LUKS header)"), 0, ARG_TYPE_NONE},
     {0, 0, 0, 0, 0, 0}
   };
 
@@ -830,7 +831,7 @@ grub_util_cryptodisk_get_uuid (grub_disk_t disk)
 
 #endif
 
-static int check_boot, have_it;
+static int check_boot, have_it, deluks_mode;
 static char *search_uuid;
 static grub_file_t hdr;
 static grub_uint8_t *key, keyfile_buffer[GRUB_CRYPTODISK_MAX_KEYFILE_SIZE];
@@ -880,6 +881,7 @@ grub_cryptodisk_scan_device_real (const char *name, grub_disk_t source)
   }
   return GRUB_ERR_NONE;
 }
+
 
 #ifdef GRUB_UTIL
 #include <grub/util/misc.h>
@@ -952,6 +954,189 @@ grub_cryptodisk_scan_device (const char *name,
   return have_it && search_uuid ? 1 : 0;
 }
 
+/*
+// This is crazy we can't find "master" disk (hdX) to list all partitions, from disk (hdX,Y) given by iterator without playing with names string. Abandonned.
+// We'll try to decipher even existing partitions. Could be avoided if disk (hdX) is passed in argument by user.
+static int
+grub_cryptodisk_scan_partition_boundary (grub_disk_t source __attribute__ ((unused)), const grub_partition_t partition,
+       void *data)
+{
+  grub_disk_addr_t partition_start;
+  grub_disk_addr_t len=0;
+  struct grub_partition_iterate_ctx *ctx = data;
+  grub_disk_addr_t *lookup_partition_end;
+  lookup_partition_end = ctx->hook_data;
+
+  if (partition) {
+      partition_start = grub_partition_get_start (partition);
+      len = grub_partition_get_len (partition);
+      grub_printf_ (N_(">> Partition start (sector) %llu, length %" PRIuGRUB_UINT64_T ", end %llu-1, compared to %llu\n"),
+        (unsigned long long) partition_start, len, (unsigned long long) partition_start + len, (unsigned long long) *lookup_partition_end);
+      
+      if (*lookup_partition_end == partition_start + len) {
+        grub_printf_ (N_(">> Found!\n"));
+        ctx->ret=1;
+        return 1;
+      }
+  }
+  
+  ctx->ret=0;
+  return 0; // continue for next partition until it returns 1
+}
+*/
+
+/* Hook_data  */
+struct scan_partition_iterate_ctx_hook_data
+{
+  int total_partitions;
+  grub_disk_addr_t last_partition_end;
+  const char *name;
+  char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE];
+};
+
+static grub_err_t
+grub_cryptodisk_mount_device_deluks (const char *name, grub_disk_t source, grub_disk_addr_t start_sector, char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE])
+{
+  grub_err_t err;
+  grub_cryptodisk_t dev;
+  grub_cryptodisk_dev_t cr;
+
+  // TODO: Find something else to check if deluks cryptodisk is already mounted, 
+  // based on offset, not on a simple disk (partition) reference
+  // dev = grub_cryptodisk_get_by_source_disk (source);
+  //if (dev)
+  //  return GRUB_ERR_NONE;
+
+  grub_printf_ (N_(" mount_device_deluks( name %s, ..., start_sector %llu, pwd %s)\n"),
+        name, (unsigned long long) start_sector, (char *) interactive_passphrase);
+
+  dev = grub_cryptodisk_get_by_source_disk (source);
+
+  if (dev)
+    return GRUB_ERR_NONE;
+
+  FOR_CRYPTODISK_DEVS (cr) // singleton luks_crypto (requires: insmod luks)
+  {
+    dev = cr->scan_deluks (source, start_sector, search_uuid, check_boot, hdr);
+    if (grub_errno)
+      return grub_errno;
+    if (!dev)
+      continue;
+    
+    err = cr->recover_key_deluks (source, start_sector, dev, hdr, key, keyfile_size, interactive_passphrase);
+    if (err)
+    {
+      cryptodisk_close (dev);
+      return err;
+    }
+
+    grub_cryptodisk_insert (dev, name, source);
+
+    have_it = 1;
+
+    return GRUB_ERR_NONE;
+  }
+  return GRUB_ERR_NONE;
+}
+
+
+static int
+grub_cryptodisk_scan_partition_boundary (grub_disk_t source, const grub_partition_t partition,
+       void *data)
+{
+  grub_disk_addr_t partition_start;
+  grub_disk_addr_t len=0;
+  struct grub_partition_iterate_ctx *ctx = data;
+  struct scan_partition_iterate_ctx_hook_data *hook_data = ctx->hook_data;
+
+  // TODO: Use the data as a structure with
+  //  - number of iterations
+  //  - last end
+  // If last end (if not 0) - current start is > 1MiB, try deciphering in separate function
+  // Also try deciphering at sector 0 if no MIB or in caller func if ctx.number of iterations is 0$
+ 
+
+  grub_printf_ (N_("  > Last partition end was %llu\n"), (unsigned long long) hook_data->last_partition_end);
+
+  if (partition) {
+      partition_start = grub_partition_get_start (partition);
+      len = grub_partition_get_len (partition);
+      grub_printf_ (N_("  > Start %llu, len %" PRIuGRUB_UINT64_T ", end %llu, d_end %" PRIuGRUB_UINT64_T "\n"),
+        (unsigned long long) partition_start, len, (unsigned long long) len + partition_start, source->total_sectors);
+
+      //if (partition_start + len < source->total_sectors && source->total_sectors - partition_start - len > ) // for caller
+      if (hook_data->last_partition_end != 0 && partition_start - hook_data->last_partition_end >= 2*(4096/GRUB_DISK_SECTOR_SIZE)*256)
+      // TODO: if > 1 MiB... and < total
+        grub_cryptodisk_mount_device_deluks(hook_data->name, source, (GRUB_CRYPTODISK_CEIL(hook_data->last_partition_end, (4096/GRUB_DISK_SECTOR_SIZE)*256)*(4096/GRUB_DISK_SECTOR_SIZE))*256, hook_data->interactive_passphrase);
+
+      hook_data->total_partitions++;
+      hook_data->last_partition_end = (grub_disk_addr_t) (partition_start + len);      
+  }      
+
+  ctx->ret=0;
+  return 0; // continue for next partition until it returns 1
+}
+
+static int
+grub_cryptodisk_scan_device_deluks (const char *name,
+           void *data)
+{
+  grub_disk_t source;
+  char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE] = data;
+  //grub_disk_addr_t partition_start;
+  //grub_disk_addr_t len = 0;
+  //grub_disk_addr_t partition_end = 0;
+  //struct grub_partition_iterate_ctx ctx = { 0, &grub_cryptodisk_scan_partition_boundary, &partition_end };
+  //grub_uint64_t disk_total_sectors;
+  //struct grub_partition_iterate_ctx ctx = { 0, &grub_cryptodisk_scan_partition_boundary, &disk_total_sectors };
+  struct scan_partition_iterate_ctx_hook_data hook_data = { 0, 0, name, interactive_passphrase };
+  struct grub_partition_iterate_ctx ctx = { 0, &grub_cryptodisk_scan_partition_boundary, &hook_data };
+
+  /* Try to open disk.  */
+  source = grub_disk_open (name);
+  if (!source)
+    {
+      grub_print_error ();
+      return 0;
+    }
+
+  //grub_printf (N_("Disk pertains to device %s\n"), source->dev->name); // TEMP
+
+  grub_printf (N_(" Disk %s (total_sectors %" PRIuGRUB_UINT64_T ")\n"), name, source->total_sectors); // TEMP
+  //disk_total_sectors = source->total_sectors;
+
+  if (source->partition) {
+    grub_printf (N_(" Partition, ignoring.\n"));
+      /*
+      partition_start = grub_partition_get_start (source->partition);
+      len = grub_partition_get_len (source->partition);
+      partition_end = partition_start + len;
+      grub_printf_ (N_(" Partition start (sector) %llu, length %" PRIuGRUB_UINT64_T ", end %llu-1\n"),
+        (unsigned long long) partition_start, len, (unsigned long long) partition_start + len);
+      */
+  } else {
+
+    if (grub_partition_iterate (source, &grub_cryptodisk_scan_partition_boundary, &ctx))
+      grub_printf_ (N_(" / Hook returned OK\n"));
+    else
+      grub_printf_ (N_(" / Hook returned POK\n"));
+    grub_printf_ (N_(" / Partition last end %llu, total partitions %d\n"),
+      (unsigned long long) hook_data.last_partition_end, hook_data.total_partitions);
+    
+    if (hook_data.total_partitions == 0 && source->total_sectors >= 2*(4096/GRUB_DISK_SECTOR_SIZE)*256)
+      grub_cryptodisk_mount_device_deluks (name, source, 0, interactive_passphrase);
+    else if (source->total_sectors - hook_data.last_partition_end >= 2*(4096/GRUB_DISK_SECTOR_SIZE)*256)
+        grub_cryptodisk_mount_device_deluks(name, source, GRUB_CRYPTODISK_CEIL(hook_data.last_partition_end, (4096/GRUB_DISK_SECTOR_SIZE)*256)*(4096/GRUB_DISK_SECTOR_SIZE))*256, interactive_passphrase);
+
+  }
+
+
+  grub_disk_close (source);
+  
+  return have_it && search_uuid ? 1 : 0;
+}
+
+
 /* Hashes a passphrase into a key and stores it with cipher. */
 static gcry_err_code_t
 set_passphrase (grub_cryptodisk_t dev, grub_size_t keysize, const char *passphrase)
@@ -998,13 +1183,14 @@ static grub_err_t
 grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
 {
   struct grub_arg_list *state = ctxt->state;
+  char interactive_passphrase[GRUB_CRYPTODISK_MAX_PASSPHRASE] = ""; // Only used by DeLUKS
 
   if (argc < 1 && !state[1].set && !state[2].set)
     return grub_error (GRUB_ERR_BAD_ARGUMENT, "device name required");
 
   if (state[3].set) /* LUKS detached header */
     {
-      if (state[0].set) /* Cannot use UUID lookup with detached header */
+      if (state[0].set || state[13].set) /* Cannot use UUID lookup with detached header or with deniable mode */
         return GRUB_ERR_BAD_ARGUMENT;
 
       hdr = grub_file_open (state[3].arg);
@@ -1017,7 +1203,7 @@ grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
   have_it = 0;
   key = NULL;
 
-  if (state[4].set) /* Key file; fails back to passphrase entry */
+  if (state[4].set && !state[13].set) /* Key file; fails back to passphrase entry */
     {
       grub_file_t keyfile;
       int keyfile_offset;
@@ -1054,8 +1240,27 @@ grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
         }
     }
 
-  if (state[0].set)
+  if (state[13].set) /* Deniable LUKS */
     {
+      search_uuid = NULL;
+      check_boot = state[2].set;
+      deluks_mode = state[3].set;
+      grub_printf_ (N_("Enter passphrase for DeLUKS scan: "));
+      if (!grub_password_get (interactive_passphrase, GRUB_CRYPTODISK_MAX_PASSPHRASE))
+        {
+          return grub_error (GRUB_ERR_BAD_ARGUMENT, "Passphrase not supplied");
+        }
+      grub_device_iterate (&grub_cryptodisk_scan_device_deluks, interactive_passphrase);
+      // memset(interactive_passphrase, 0, GRUB_CRYPTODISK_MAX_PASSPHRASE); // Wipe memory
+      search_uuid = NULL;
+      return GRUB_ERR_NONE;
+    }
+  else if (state[0].set) /* Mount by UUID */
+    {
+
+      if (state[13].set) /* Cannot use UUID lookup with deniable mode */
+        return GRUB_ERR_BAD_ARGUMENT;
+
       grub_cryptodisk_t dev;
 
       dev = grub_cryptodisk_get_by_uuid (args[0]);
@@ -1075,7 +1280,7 @@ grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
 	return grub_error (GRUB_ERR_BAD_ARGUMENT, "no such cryptodisk found");
       return GRUB_ERR_NONE;
     }
-  else if (state[1].set || (argc == 0 && state[2].set))
+  else if (state[1].set || (argc == 0 && state[2].set)) /* Mount all */
     {
       search_uuid = NULL;
       check_boot = state[2].set;
@@ -1083,7 +1288,7 @@ grub_cmd_cryptomount (grub_extcmd_context_t ctxt, int argc, char **args)
       search_uuid = NULL;
       return GRUB_ERR_NONE;
     }
-  else
+  else /* Mount by disk name */
     {
       grub_err_t err;
       grub_disk_t disk;
@@ -1506,7 +1711,7 @@ GRUB_MOD_INIT (cryptodisk)
 {
   grub_disk_dev_register (&grub_cryptodisk_dev);
   cmd = grub_register_extcmd ("cryptomount", grub_cmd_cryptomount, 0,
-			      N_("SOURCE|-u UUID|-a|-b|-H file|-p -c cipher -d digest"),
+			      N_("SOURCE|-u UUID|-a|-b|-H file|-p -c cipher -d digest|-x"),
 			      N_("Mount a crypto device."), options);
   grub_procfs_register ("luks_script", &luks_script);
 }

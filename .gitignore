@@ -247,3 +247,4 @@ build-aux/test-driver
 /garbage-gen.exe
 /grub-fs-tester
 /.project
+*~

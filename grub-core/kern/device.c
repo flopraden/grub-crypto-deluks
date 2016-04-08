@@ -164,15 +164,15 @@ iterate_disk (const char *disk_name, void *data)
 
       p = ctx->ents;
       while (p != NULL)
-	{
-	  struct part_ent *next = p->next;
+    	{
+    	  struct part_ent *next = p->next;
 
-	  if (!ret)
-	    ret = ctx->hook (p->name, ctx->hook_data);
-	  grub_free (p->name);
-	  grub_free (p);
-	  p = next;
-	}
+    	  if (!ret)
+    	    ret = ctx->hook (p->name, ctx->hook_data);
+    	  grub_free (p->name);
+    	  grub_free (p);
+    	  p = next;
+    	}
 
       return ret;
     }

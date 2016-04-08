@@ -20,12 +20,15 @@
 #define GRUB_CRYPTODISK_HEADER	1
 
 #include <grub/disk.h>
+#include <grub/partition.h>
 #include <grub/file.h>
 #include <grub/crypto.h>
 #include <grub/list.h>
 #ifdef GRUB_UTIL
 #include <grub/emu/hostdisk.h>
 #endif
+ 
+#define GRUB_CRYPTODISK_CEIL(a, b) (((a) / (b)) + (((a) % (b)) > 0 ? 1 : 0))
 
 typedef enum
   {
@@ -47,13 +50,14 @@ typedef enum
     GRUB_CRYPTODISK_MODE_IV_BYTECOUNT64_HASH
   } grub_cryptodisk_mode_iv_t;
 
+
 #define GRUB_CRYPTODISK_MAX_UUID_LENGTH 71
 
 #define GRUB_CRYPTODISK_GF_LOG_SIZE 7
 #define GRUB_CRYPTODISK_GF_SIZE (1U << GRUB_CRYPTODISK_GF_LOG_SIZE)
 #define GRUB_CRYPTODISK_GF_LOG_BYTES (GRUB_CRYPTODISK_GF_LOG_SIZE - 3)
 #define GRUB_CRYPTODISK_GF_BYTES (1U << GRUB_CRYPTODISK_GF_LOG_BYTES)
-#define GRUB_CRYPTODISK_MAX_KEYLEN 128
+#define GRUB_CRYPTODISK_MAX_KEYLEN 128 // Max key size in BYTES
 #define GRUB_CRYPTODISK_MAX_PASSPHRASE 256
 
 #define GRUB_CRYPTODISK_MAX_KEYFILE_SIZE 8192
@@ -61,6 +65,14 @@ typedef enum
 #define GRUB_CRYPTODISK_PLAIN_CIPHER  "aes-cbc-essiv:sha256"
 #define GRUB_CRYPTODISK_PLAIN_DIGEST  "ripemd160"
 #define GRUB_CRYPTODISK_PLAIN_KEYSIZE 256
+
+#define GRUB_CRYPTODISK_MIN_KEYLEN 16 // Min key size in BYTES. Based on below KEYSIZE*AF_STRIPES rule.
+#define GRUB_CRYPTODISK_DENIABLE_CIPHERNAME  "aes"
+#define GRUB_CRYPTODISK_DENIABLE_CIPHERMODE  "xts-plain64"
+#define GRUB_CRYPTODISK_DENIABLE_DIGEST  "sha256"
+#define GRUB_CRYPTODISK_DENIABLE_KEYSIZE 32 // Key size in BYTES (default: 256/8)
+#define GRUB_CRYPTODISK_DENIABLE_AF_STRIPES 4000 // KEYSIZE*AF_STRIPES must be a factor of SECTOR_SIZE (512bytes)
+#define GRUB_CRYPTODISK_DENIABLE_ITERATIONS 20000
 
 struct grub_cryptodisk;
 
@@ -118,6 +130,14 @@ struct grub_cryptodisk_dev
 			     int boot_only, grub_file_t hdr);
   grub_err_t (*recover_key) (grub_disk_t disk, grub_cryptodisk_t dev,
 			    grub_file_t hdr, grub_uint8_t *key, grub_size_t keyfile_size);
+  grub_cryptodisk_t (*scan_deluks) (grub_disk_t disk,
+          grub_disk_addr_t start_sector, const char *check_uuid,
+          int check_boot, grub_file_t hdr);
+  grub_err_t (*recover_key_deluks) (grub_disk_t source,
+          grub_disk_addr_t start_sector, grub_cryptodisk_t dev,
+          grub_file_t hdr, grub_uint8_t *keyfile_bytes,
+          grub_size_t keyfile_bytes_size,
+          char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE]);
 };
 typedef struct grub_cryptodisk_dev *grub_cryptodisk_dev_t;
 
@@ -171,3 +191,11 @@ grub_cryptodisk_t grub_cryptodisk_create (grub_disk_t disk, char *uuid,
 int
 grub_cryptodisk_uuidcmp(const char *uuid_a, const char *uuid_b);
 #endif
+
+/* Context for grub_partition_iterate.  */
+struct grub_partition_iterate_ctx
+{
+  int ret;
+  grub_partition_iterate_hook_t hook;
+  void *hook_data;
+};
