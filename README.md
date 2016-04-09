@@ -1,16 +1,19 @@
 # Introduction
-## DeLUKS: Deniable Linux Unified Key Setup
+
+
+
+[![DeLUKS: Deniable Linux Unified Key Setup](https://raw.githubusercontent.com/kriswebdev/grub-crypto-deluks/gh-pages/assets/deluks_logo.png)](https://github.com/kriswebdev/grub-crypto-deluks)
 
 This development branch is a work in progress to specify and implement a Deniable LUKS header recognized by GRUB.
 
-DeLUKS will provide most benefits of both dm-crypt and LUKS.
+DeLUKS will provide most benefits of LUKS and of plausibly [deniable encryption](https://en.wikipedia.org/wiki/Deniable_encryption).
 
 Expected Features
 ===
 - **QUICK BOOT!** At GRUB menu, press `c` to get into GRUB shell, then `cryptomount -x` and your password. That's all!
 - **DENIABLE!**
-  - DeLUKS header and encrypted payload are **indissociable from random data**. *"Why is there random data on your unallocated disk space? - I wiped my disk"*
-  - Bootloader is nothing more than **GRUB**. If the code is integrated upstream, it will even be indissociable from mainstream GRUB *"Why do you have a bootloader with deniable decryption feature? - Do I? It's the default GRUB."*
+  - DeLUKS header and encrypted payload are **indistinguishable from random data**. *"Why is there random data on your unallocated disk space? - I wiped my disk"*
+  - Bootloader is nothing more than **GRUB**. If the code is integrated upstream, the setup will even be indistinguishable from mainstream GRUB *"Why do you have a bootloader with deniable decryption feature? - Do I? It's the default GRUB."*
   - **No bootloader password menu**. Base of deny, YOU command the bootloader to ask you for a password, not the other way round. *"Look, I just installed this O.S. on my wiped drive, it's GRUB's only menu choice. Where would I hide something?"*
   - DeLUKS finds encrypted disks by **scanning** & trying to mount all unallocated disk space > 2MiB.
   - **No poorly secured USB key** needed! But use one if you really want to. *"We didn't find any (1) remote header (2) unencrypted keyfile (3) loosely brute-forcable plain dm-crypt keyfile (choose one) on your USB key."*
@@ -23,11 +26,11 @@ Expected Features
 
 Theoretical limitations and workarounds
 ===
-It is impossible to write the header encryption parameters on disk without loosing deniability character.
-Therefore the Master key / keyslots encryption parameters must use DeLUKS default presets of the installed GRUB version (or be provided through command-line arguments at each boot as an annoying last resort).
+It is difficult to write the header encryption parameters on disk without compromising deniability character or security.
+Therefore the Master key / keyslots encryption parameters should use DeLUKS default presets of the installed GRUB version (or be provided through command-line arguments at each boot as an annoying last resort).
 
 However, default presets hard-coded in GRUB-cryptomount shall regularly evolve to follow security best practices.
-Hence, once GRUB is updated with newer DeLUKS default presets, it shall behave according to this:
+Hence, once GRUB is updated with newer DeLUKS default presets, it shall behave according to this procedure:
 - GRUB-cryptomount will try to decrypt the disks using the latests presets.
 - If GRUB-cryptomount fails to decrypt any disk, it will try with older presets.
 - If GRUB-cryptomount succeds to decrypt any disk with older presets, it shall warn the user to re-create the DeLUKS header with newer presets using cryptsetup. And continue booting.
