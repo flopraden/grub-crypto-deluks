@@ -4,9 +4,11 @@
 
 [![DeLUKS: Deniable Linux Unified Key Setup](https://raw.githubusercontent.com/kriswebdev/grub-crypto-deluks/gh-pages/assets/deluks_logo.png)](https://github.com/kriswebdev/grub-crypto-deluks)
 
-This development branch is a work in progress to specify and implement a Deniable LUKS header recognized by GRUB.
+This repo development branch is a work in progress to specify a Deniable LUKS header and implement it in **GRUB Cryptomount**.
 
 DeLUKS will provide most benefits of LUKS and of plausibly [deniable encryption](https://en.wikipedia.org/wiki/Deniable_encryption).
+
+Note there is a parrallel project to implement DeLUKS in Cryptsetup: [cryptsetup-deluks](https://github.com/kriswebdev/cryptsetup-deluks).
 
 Expected Features
 ===
