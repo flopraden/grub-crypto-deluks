@@ -57,31 +57,52 @@ struct grub_luks_phdr
   } keyblock[8];
 } GRUB_PACKED;
 
+/* Deniable LUKS options header */
+struct deluks_phdr_opt {          // ENCRYPTED ON DISK
+  char    magic[6];
+  grub_uint16_t  version;
+  grub_uint32_t  keyBytes;
+  char    cipherName[32];
+  char    cipherMode[32];
+  grub_uint64_t  payloadOffset;
+  grub_uint64_t  payloadTotalSectors;
+  char    uuid[40];
+  grub_uint8_t   bootPriority;
+  struct GRUB_PACKED {
+    grub_uint32_t active;
+  } keyblock[8];
+  grub_uint8_t   _padding[347];
+} GRUB_PACKED;
+
 /* On disk Deniable LUKS header */
 struct grub_deluks_phdr
 {
-  grub_uint8_t padding01[6];
-  grub_uint16_t padding02;
-  char padding03[32];
-  char padding04[32];
-  char padding05[32];
-  grub_uint32_t padding06;
-  grub_uint32_t padding07;
+  grub_uint8_t magic[6];             // RANDOM ON DISK
+  grub_uint16_t version;             // RANDOM ON DISK
+  char cipherName[32];               // RANDOM ON DISK
+  char cipherMode[32];               // RANDOM ON DISK
+  char hashSpec[32];                 // RANDOM ON DISK
+  grub_uint64_t payloadOffset;       // RANDOM ON DISK
+  grub_uint32_t keyBytes;            // RANDOM ON DISK
   grub_uint8_t mkDigest[20];
   grub_uint8_t mkDigestSalt[32];
-  grub_uint32_t padding08;
-  char padding09[40];
-  grub_uint8_t additionalPadding10[304]; /* Have specialPadding10 instead of keyblock[3] salt at the position of Master Boot Record magic number */
-  struct
+  grub_uint32_t mkDigestIterations;  // RANDOM ON DISK
+  char uuid[40];                     // RANDOM ON DISK
+  grub_uint8_t _padding1[300]; /* Have specialPadding10 instead of keyblock[3] salt at the position of Master Boot Record magic number */
+
+  /* key information blocks, 512 bytes */
+  struct GRUB_PACKED
   {
-    grub_uint32_t padding11;
-    grub_uint32_t padding12;
+    grub_uint32_t active;
+    grub_uint32_t passwordIterations;
     grub_uint8_t passwordSalt[32];
-    grub_uint32_t padding13;
-    grub_uint32_t padding14;
+    grub_uint64_t keyMaterialOffset;
+    grub_uint32_t stripes;
   } keyblock[8];
-  grub_uint8_t additionalPadding15[304]; /* Start on new block */
-  grub_uint8_t encryptedOptions[512];
+  grub_uint8_t additionalPadding15[96]; /* Start on new sector */
+
+  /* encrypted part, 512 bytes */
+  struct deluks_phdr_opt options;
 } GRUB_PACKED;
 
 
@@ -90,7 +111,7 @@ typedef struct grub_luks_phdr *grub_luks_phdr_t;
 gcry_err_code_t AF_merge (const gcry_md_spec_t * hash, grub_uint8_t * src,
 			  grub_uint8_t * dst, grub_size_t blocksize,
 			  grub_size_t blocknumbers);
-
+ 
 // LUKS
 static grub_cryptodisk_t
 configure_ciphers (grub_disk_t disk, const char *check_uuid,
@@ -155,71 +176,6 @@ configure_ciphers (grub_disk_t disk, const char *check_uuid,
   return newdev;
 }
 
-// DELUKS
-static grub_cryptodisk_t
-configure_ciphers_deluks (grub_disk_t disk, grub_disk_addr_t start_sector,
-       const char *check_uuid __attribute__ ((unused)), int check_boot, grub_file_t hdr)
-{
-  grub_cryptodisk_t newdev;
-  struct grub_luks_phdr header;
-  struct grub_deluks_phdr header_deluks;
-  char uuid[sizeof (header.uuid) + 1];
-  char ciphername[sizeof (header.cipherName) + 1];
-  char ciphermode[sizeof (header.cipherMode) + 1];
-  char hashspec[sizeof (header.hashSpec) + 1];
-  grub_err_t err;
-
-  err = GRUB_ERR_NONE;
-
-  if (check_boot)
-    return NULL;
-
-  /* Read the DeLUKS header.  */
-  if (hdr)
-  {
-    /* Detached DeLUKS header is supported. */
-    /* Detached "Plain" LUKS header is not supported for now. */
-    grub_file_seek (hdr, 0);
-    if (grub_file_read (hdr, &header_deluks, sizeof (header_deluks)) != sizeof (header_deluks))
-        err = GRUB_ERR_READ_ERROR;
-  }
-  else
-    err = grub_disk_read (disk, start_sector, 0, sizeof (header_deluks), &header_deluks);
-
-  if (err)
-    {
-      if (err == GRUB_ERR_OUT_OF_RANGE)
-        grub_errno = GRUB_ERR_NONE;
-      return NULL;
-    }
-
-
-  /* Make sure that strings are null terminated.  */
-  grub_memcpy (ciphername, GRUB_CRYPTODISK_DENIABLE_CIPHERNAME, sizeof (header.cipherName));
-  ciphername[sizeof (GRUB_CRYPTODISK_DENIABLE_CIPHERNAME)] = 0;
-  grub_memcpy (ciphermode, GRUB_CRYPTODISK_DENIABLE_CIPHERMODE, sizeof (header.cipherMode)); // TODO: should be parameterizable from command-line for onward compatibility/security
-  ciphermode[sizeof (GRUB_CRYPTODISK_DENIABLE_CIPHERMODE)] = 0;
-  grub_memcpy (hashspec, GRUB_CRYPTODISK_DENIABLE_DIGEST, sizeof (header.hashSpec));
-  hashspec[sizeof (GRUB_CRYPTODISK_DENIABLE_DIGEST)] = 0;
-  grub_memcpy (uuid, "\0", sizeof (header.uuid));
-  /* UUID is inside encrypted options
-  if ( check_uuid && ! grub_cryptodisk_uuidcmp(check_uuid, uuid))
-    {
-      grub_dprintf ("luks", "%s != %s\n", uuid, check_uuid);
-      return NULL;
-    }
-  */
-  newdev = grub_cryptodisk_create (disk, uuid, ciphername, ciphermode, hashspec);
-
-  newdev->offset = grub_be_to_cpu32 (header.payloadOffset);
-  newdev->modname = "luks";
-
-  /* Return a possibly not DeLUKS disk.
-     DeLUKS disk validity will be confirmed during deluks_recover_key() */
-  return newdev;
-}
-
-
 // LUKS
 static grub_err_t
 luks_recover_key (grub_disk_t source,
@@ -257,7 +213,7 @@ luks_recover_key (grub_disk_t source,
   if (err)
     return err;
 
-  grub_puts_ (N_("Attempting to decrypt master key..."));
+  grub_puts_ (N_("Attempting to decrypt LUKS master key..."));
   keysize = grub_be_to_cpu32 (header.keyBytes);
   if (keysize > GRUB_CRYPTODISK_MAX_KEYLEN)
     return grub_error (GRUB_ERR_BAD_FS, "key is too long");
@@ -423,17 +379,27 @@ luks_recover_key (grub_disk_t source,
 }
 
 // DELUKS
-static grub_err_t
-deluks_recover_key (grub_disk_t source,
+
+// DELUKS
+static grub_cryptodisk_t
+scan_recover_deluks (grub_disk_t source,
                     grub_disk_addr_t start_sector,
-                    grub_cryptodisk_t dev,
+                    const char *check_uuid __attribute__ ((unused)),
+                    int check_boot,
                     grub_file_t hdr,
                     grub_uint8_t *keyfile_bytes,
                     grub_size_t keyfile_bytes_size,
                     char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE])
 {
+  grub_cryptodisk_t dev_keys, dev_opts;
+  grub_cryptodisk_t dev;
   struct grub_luks_phdr header;
   struct grub_deluks_phdr header_deluks;
+  char uuid[sizeof (header.uuid) + 1];
+  char ciphername[sizeof (header.cipherName) + 1];
+  char ciphermode[sizeof (header.cipherMode) + 1];
+  char hashspec[sizeof (header.hashSpec) + 1];
+  grub_err_t err;
   grub_size_t keysize;
   grub_uint8_t *split_key = NULL;
   grub_uint8_t *passphrase;
@@ -441,8 +407,53 @@ deluks_recover_key (grub_disk_t source,
   grub_uint8_t candidate_digest[sizeof (header.mkDigest)];
   unsigned i;
   grub_size_t length;
-  grub_err_t err;
   grub_uint32_t sector;
+  char ciphermode_enc_hdr[]="xts-plain64";
+  //char* ciphermode_opts;
+
+  err = GRUB_ERR_NONE;
+  if (check_boot)
+    return NULL;
+
+  /* Read the DeLUKS header.  */
+  if (hdr)
+  {
+    /* Detached DeLUKS header is supported. */
+    /* Detached "Plain" LUKS header is not supported for now. */
+    grub_file_seek (hdr, 0);
+    if (grub_file_read (hdr, &header_deluks, sizeof (header_deluks)) != sizeof (header_deluks))
+        err = GRUB_ERR_READ_ERROR;
+  }
+  else
+    err = grub_disk_read (source, start_sector, 0, sizeof (header_deluks), &header_deluks);
+
+  if (err)
+    {
+      if (err == GRUB_ERR_OUT_OF_RANGE)
+        grub_errno = GRUB_ERR_NONE;
+      return NULL;
+    }
+
+
+  /* Make sure that strings are null terminated.  */
+  grub_memcpy (ciphername, GRUB_CRYPTODISK_DENIABLE_CIPHERNAME, sizeof (header.cipherName));
+  ciphername[sizeof (GRUB_CRYPTODISK_DENIABLE_CIPHERNAME)] = 0;
+  grub_memcpy (ciphermode, GRUB_CRYPTODISK_DENIABLE_CIPHERMODE, sizeof (header.cipherMode)); // TODO: should be parameterizable from command-line for onward compatibility/security
+  ciphermode[sizeof (GRUB_CRYPTODISK_DENIABLE_CIPHERMODE)] = 0;
+  grub_memcpy (hashspec, GRUB_CRYPTODISK_DENIABLE_DIGEST, sizeof (header.hashSpec));
+  hashspec[sizeof (GRUB_CRYPTODISK_DENIABLE_DIGEST)] = 0;
+  grub_memcpy (uuid, "\0", sizeof (header.uuid));
+  /* UUID is inside encrypted options
+  if ( check_uuid && ! grub_cryptodisk_uuidcmp(check_uuid, uuid))
+    {
+      grub_dprintf ("luks", "%s != %s\n", uuid, check_uuid);
+      return NULL;
+    }
+  */
+
+  dev_keys = grub_cryptodisk_create (source, uuid, ciphername, ciphermode, hashspec);
+  dev_keys->offset = 4096; // Temporary until we decrypt the header
+  dev_keys->modname = "luks";
 
   err = GRUB_ERR_NONE;
 
@@ -455,20 +466,27 @@ deluks_recover_key (grub_disk_t source,
   else
     err = grub_disk_read (source, start_sector, 0, sizeof (header_deluks), &header_deluks);
 
-  if (err)
-    return err;
+  if (err) {
+    grub_errno = err;
+    cryptodisk_close (dev_keys);
+    return NULL;
+  }
 
-  grub_puts_ (N_("Attempting to decrypt master key..."));
-  keysize = grub_be_to_cpu32 (GRUB_CRYPTODISK_DENIABLE_KEYSIZE);
-  if (keysize > GRUB_CRYPTODISK_MAX_KEYLEN)
-    return grub_error (GRUB_ERR_BAD_FS, "key is too long");
+  grub_puts_ (N_("Attempting to decrypt DeLUKS master key..."));
+
+  keysize = GRUB_CRYPTODISK_DENIABLE_KEYSIZE;
+  if (keysize > GRUB_CRYPTODISK_MAX_KEYLEN) {
+    grub_errno = grub_error (GRUB_ERR_BAD_FS, "key is too long");
+    cryptodisk_close (dev_keys);
+    return NULL;
+  }
 
   split_key = grub_malloc (GRUB_CRYPTODISK_DENIABLE_KEYSIZE * GRUB_CRYPTODISK_DENIABLE_AF_STRIPES);
-  if (!split_key)
-    return grub_errno;
+  if (!split_key) {
+    cryptodisk_close (dev_keys);
+    return NULL;
+  }
 
-  do
-    {
       if (keyfile_bytes)
         {
           /* Use bytestring from key file as passphrase */
@@ -483,7 +501,7 @@ deluks_recover_key (grub_disk_t source,
         }
 
       /* Try to recover master key from each active keyslot.  */
-      for (i = 0; i < ARRAY_SIZE (header_deluks.keyblock); i++)
+      for (i = 0; i < 1; i++) // TEEEEMP => i < ARRAY_SIZE (header_deluks.keyblock)
         {
           gcry_err_code_t gcry_err;
           grub_uint8_t candidate_key[GRUB_CRYPTODISK_MAX_KEYLEN];
@@ -494,30 +512,32 @@ deluks_recover_key (grub_disk_t source,
           grub_dprintf ("luks", "Trying keyslot %d\n", i);
 
           /* Calculate the PBKDF2 of the user supplied passphrase.  */
-          gcry_err = grub_crypto_pbkdf2 (dev->hash, (grub_uint8_t *) passphrase,
+          gcry_err = grub_crypto_pbkdf2 (dev_keys->hash, (grub_uint8_t *) passphrase,
                                          passphrase_length,
                                          header_deluks.keyblock[i].passwordSalt,
                                          sizeof (header_deluks.keyblock[i].passwordSalt),
-                                         grub_be_to_cpu32 (GRUB_CRYPTODISK_DENIABLE_ITERATIONS),
+                                         GRUB_CRYPTODISK_DENIABLE_ITERATIONS,
                                          digest, keysize);
 
           if (gcry_err)
             {
               grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
-          grub_dprintf ("luks", "PBKDF2 done\n");
-
-          gcry_err = grub_cryptodisk_setkey (dev, digest, keysize);
+          gcry_err = grub_cryptodisk_setkey (dev_keys, digest, keysize);
           if (gcry_err)
             {
               grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
-          sector = grub_be_to_cpu32 (start_sector + 8 + i*GRUB_CRYPTODISK_DENIABLE_KEYSIZE*GRUB_CRYPTODISK_DENIABLE_AF_STRIPES);
-          length = (keysize * grub_be_to_cpu32 (GRUB_CRYPTODISK_DENIABLE_AF_STRIPES));
+          sector = start_sector + 8 + i*GRUB_CRYPTODISK_DENIABLE_KEYSIZE*GRUB_CRYPTODISK_DENIABLE_AF_STRIPES;
+          length = (keysize * GRUB_CRYPTODISK_DENIABLE_AF_STRIPES);
 
           /* Read and decrypt the key material from the disk.  */
           if (hdr)
@@ -531,40 +551,47 @@ deluks_recover_key (grub_disk_t source,
           if (err)
             {
               grub_free (split_key);
-              return err;
+              grub_errno = err;
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
-          gcry_err = grub_cryptodisk_decrypt (dev, split_key, length, 0);
+          gcry_err = grub_cryptodisk_decrypt (dev_keys, split_key, length, 0);
           if (gcry_err)
             {
               grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
           /* Merge the decrypted key material to get the candidate master key.  */
-          gcry_err = AF_merge (dev->hash, split_key, candidate_key, keysize,
-                               grub_be_to_cpu32 (GRUB_CRYPTODISK_DENIABLE_AF_STRIPES));
+          gcry_err = AF_merge (dev_keys->hash, split_key, candidate_key, keysize,
+                               GRUB_CRYPTODISK_DENIABLE_AF_STRIPES);
           if (gcry_err)
             {
               grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
           grub_dprintf ("luks", "candidate key recovered\n");
 
           /* Calculate the PBKDF2 of the candidate master key.  */
-          gcry_err = grub_crypto_pbkdf2 (dev->hash, candidate_key,
-                                     grub_be_to_cpu32 (GRUB_CRYPTODISK_DENIABLE_KEYSIZE),
+          gcry_err = grub_crypto_pbkdf2 (dev_keys->hash, candidate_key,
+                                     GRUB_CRYPTODISK_DENIABLE_KEYSIZE,
                                      header_deluks.mkDigestSalt,
                                      sizeof (header_deluks.mkDigestSalt),
-                                     grub_be_to_cpu32
-                                     (GRUB_CRYPTODISK_DENIABLE_ITERATIONS),
+                                     GRUB_CRYPTODISK_DENIABLE_ITERATIONS,
                                      candidate_digest,
                                      sizeof (candidate_digest));
           if (gcry_err)
             {
               grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              cryptodisk_close (dev_keys);
+              return NULL;
             }
 
           /* Compare the calculated PBKDF2 to the digest stored
@@ -580,49 +607,81 @@ deluks_recover_key (grub_disk_t source,
              where each element is either empty or holds a key.  */
           grub_printf_ (N_("Slot %d opened\n"), i);
 
-          /* Set the master key.  */
-          gcry_err = grub_cryptodisk_setkey (dev, candidate_key, keysize);
-          if (gcry_err)
-            {
-              grub_free (split_key);
-              return grub_crypto_gcry_error (gcry_err);
-            }
 
           /*  !!!!!!!!!!! TODO !!!!!!!!!
-          
+              Header encryption settings are stored in the cryptodevice struct.
+              They will be replaced by the payload encryption seetings.
+
+        
+          Decipher options encrypted header. We need:
+          - UUID
+          - CipherName
+          - CipherMode
+          - Boot priority
+          - Keybytes (trunk)
+          - payloadOffset
+          - payloadTotalSector
 
 
-
-
-          Decipher options encrypted header
           Set all final header/device variables
           Device start offset?
           Fixed header size sector size independant
 
+          */
 
+          /* Decrypt the options sub-header */
+          grub_dprintf ("luks", "starting header decryption\n");
 
+          char  *buf_out = (char*)&header_deluks.options;
 
+          dev_opts = grub_cryptodisk_create (source, uuid, ciphername, ciphermode_enc_hdr, hashspec);
+          gcry_err = grub_cryptodisk_setkey (dev_opts, candidate_key, keysize);
+          if (gcry_err)
+            {
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              grub_free (split_key);
+              cryptodisk_close (dev_keys);
+              return NULL;
+            }
 
-          */      
+          grub_cryptodisk_decrypt (dev_opts, (grub_uint8_t*) buf_out, sizeof(header_deluks.options), (grub_disk_addr_t) 0);
+          grub_dprintf ("luks", "decrypted cipherName = %s\n", header_deluks.options.cipherName);
+
+          /* Create the final device */
+          dev = grub_cryptodisk_create (source, uuid, ciphername, ciphermode, hashspec);
+          dev->offset = 4096; // Temporary until we decrypt the header
+          dev->modname = "luks";
+
+          /* Set the master key.  */
+          gcry_err = grub_cryptodisk_setkey (dev, candidate_key, keysize);
+          if (gcry_err)
+            {
+              grub_errno = grub_crypto_gcry_error (gcry_err);
+              grub_free (split_key);
+              cryptodisk_close (dev_keys);
+              cryptodisk_close (dev);
+              return NULL;
+            }
 
           grub_free (split_key);
 
-          return GRUB_ERR_NONE;
+          cryptodisk_close (dev_keys);
+          return dev;
         }
       grub_printf_ (N_("Failed to decrypt master key.\n"));
       // There is only one attempt to decrypt.
       // Other attempts should be implemented at the grub_cmd_cryptomount() level.
-    } while(0); // Easy LUKS > DeLUKS code porting
 
   grub_free (split_key);
-  return GRUB_ACCESS_DENIED;
+  grub_errno = GRUB_ACCESS_DENIED;
+  cryptodisk_close (dev_keys);
+  return NULL;
 }
 
 struct grub_cryptodisk_dev luks_crypto = {
   .scan = configure_ciphers,
   .recover_key = luks_recover_key,
-  .scan_deluks = configure_ciphers_deluks,
-  .recover_key_deluks = deluks_recover_key
+  .scan_recover_deluks = scan_recover_deluks
 };
 
 GRUB_MOD_INIT (luks)

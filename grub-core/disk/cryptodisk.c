@@ -353,35 +353,35 @@ grub_cryptodisk_endecrypt (struct grub_cryptodisk *dev,
 	  if (err)
 	    return err;
 	  break;
-	case GRUB_CRYPTODISK_MODE_XTS:
-	  {
-	    unsigned j;
-	    err = grub_crypto_ecb_encrypt (dev->secondary_cipher, iv, iv,
-					   dev->cipher->cipher->blocksize);
-	    if (err)
-	      return err;
-	    
-	    for (j = 0; j < (1U << dev->log_sector_size);
-		 j += dev->cipher->cipher->blocksize)
-	      {
-		grub_crypto_xor (data + i + j, data + i + j, iv,
-				 dev->cipher->cipher->blocksize);
-		if (do_encrypt)
-		  err = grub_crypto_ecb_encrypt (dev->cipher, data + i + j, 
-						 data + i + j,
-						 dev->cipher->cipher->blocksize);
-		else
-		  err = grub_crypto_ecb_decrypt (dev->cipher, data + i + j, 
-						 data + i + j,
-						 dev->cipher->cipher->blocksize);
-		if (err)
-		  return err;
-		grub_crypto_xor (data + i + j, data + i + j, iv,
-				 dev->cipher->cipher->blocksize);
-		gf_mul_x ((grub_uint8_t *) iv);
-	      }
-	  }
-	  break;
+   case GRUB_CRYPTODISK_MODE_XTS:
+   {
+     unsigned j;
+     err = grub_crypto_ecb_encrypt (dev->secondary_cipher, iv, iv,
+      dev->cipher->cipher->blocksize);
+       if (err)
+         return err;
+       for (j = 0; j < (1U << dev->log_sector_size);
+         j += dev->cipher->cipher->blocksize)
+       {
+        grub_crypto_xor (data + i + j, data + i + j, iv,
+         dev->cipher->cipher->blocksize);
+        if (do_encrypt)
+          err = grub_crypto_ecb_encrypt (dev->cipher, data + i + j, 
+           data + i + j,
+           dev->cipher->cipher->blocksize);
+        else {
+          err = grub_crypto_ecb_decrypt (dev->cipher, data + i + j, 
+           data + i + j,
+           dev->cipher->cipher->blocksize);
+      }
+        if (err)
+          return err;
+        grub_crypto_xor (data + i + j, data + i + j, iv,
+         dev->cipher->cipher->blocksize);
+        gf_mul_x ((grub_uint8_t *) iv);
+      }
+    }
+    break;
 	case GRUB_CRYPTODISK_MODE_LRW:
 	  {
 	    struct lrw_sector sec;
@@ -837,7 +837,7 @@ static grub_file_t hdr;
 static grub_uint8_t *key, keyfile_buffer[GRUB_CRYPTODISK_MAX_KEYFILE_SIZE];
 static grub_size_t keyfile_size;
 
-static void
+void
 cryptodisk_close (grub_cryptodisk_t dev)
 {
   grub_crypto_cipher_close (dev->cipher);
@@ -997,7 +997,6 @@ struct scan_partition_iterate_ctx_hook_data
 static grub_err_t
 grub_cryptodisk_mount_device_deluks (const char *name, grub_disk_t source, grub_disk_addr_t start_sector, char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE])
 {
-  grub_err_t err;
   grub_cryptodisk_t dev;
   grub_cryptodisk_dev_t cr;
 
@@ -1007,6 +1006,7 @@ grub_cryptodisk_mount_device_deluks (const char *name, grub_disk_t source, grub_
   //if (dev)
   //  return GRUB_ERR_NONE;
 
+  // Display with "set debug=cryptodisk" from GRUB shell
   grub_printf_ (N_(" mount_device_deluks( name %s, ..., start_sector %llu, pwd %s)\n"),
         name, (unsigned long long) start_sector, (char *) interactive_passphrase);
 
@@ -1017,18 +1017,11 @@ grub_cryptodisk_mount_device_deluks (const char *name, grub_disk_t source, grub_
 
   FOR_CRYPTODISK_DEVS (cr) // singleton luks_crypto (requires: insmod luks)
   {
-    dev = cr->scan_deluks (source, start_sector, search_uuid, check_boot, hdr);
+    dev = cr->scan_recover_deluks (source, start_sector, search_uuid, check_boot, hdr, key, keyfile_size, interactive_passphrase);
     if (grub_errno)
       return grub_errno;
     if (!dev)
       continue;
-    
-    err = cr->recover_key_deluks (source, start_sector, dev, hdr, key, keyfile_size, interactive_passphrase);
-    if (err)
-    {
-      cryptodisk_close (dev);
-      return err;
-    }
 
     grub_cryptodisk_insert (dev, name, source);
 
@@ -1126,7 +1119,7 @@ grub_cryptodisk_scan_device_deluks (const char *name,
     if (hook_data.total_partitions == 0 && source->total_sectors >= 2*(4096/GRUB_DISK_SECTOR_SIZE)*256)
       grub_cryptodisk_mount_device_deluks (name, source, 0, interactive_passphrase);
     else if (source->total_sectors - hook_data.last_partition_end >= 2*(4096/GRUB_DISK_SECTOR_SIZE)*256)
-        grub_cryptodisk_mount_device_deluks(name, source, GRUB_CRYPTODISK_CEIL(hook_data.last_partition_end, (4096/GRUB_DISK_SECTOR_SIZE)*256)*(4096/GRUB_DISK_SECTOR_SIZE))*256, interactive_passphrase);
+      grub_cryptodisk_mount_device_deluks(name, source, GRUB_CRYPTODISK_CEIL(hook_data.last_partition_end, (4096/GRUB_DISK_SECTOR_SIZE)*256)*(4096/GRUB_DISK_SECTOR_SIZE)*256, interactive_passphrase);
 
   }
 

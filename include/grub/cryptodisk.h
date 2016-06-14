@@ -64,15 +64,15 @@ typedef enum
 
 #define GRUB_CRYPTODISK_PLAIN_CIPHER  "aes-cbc-essiv:sha256"
 #define GRUB_CRYPTODISK_PLAIN_DIGEST  "ripemd160"
-#define GRUB_CRYPTODISK_PLAIN_KEYSIZE 256
+#define GRUB_CRYPTODISK_PLAIN_KEYSIZE 256 // Key size in BITS
 
 #define GRUB_CRYPTODISK_MIN_KEYLEN 16 // Min key size in BYTES. Based on below KEYSIZE*AF_STRIPES rule.
 #define GRUB_CRYPTODISK_DENIABLE_CIPHERNAME  "aes"
 #define GRUB_CRYPTODISK_DENIABLE_CIPHERMODE  "xts-plain64"
 #define GRUB_CRYPTODISK_DENIABLE_DIGEST  "sha256"
-#define GRUB_CRYPTODISK_DENIABLE_KEYSIZE 32 // Key size in BYTES (default: 256/8)
-#define GRUB_CRYPTODISK_DENIABLE_AF_STRIPES 4000 // KEYSIZE*AF_STRIPES must be a factor of SECTOR_SIZE (512bytes)
-#define GRUB_CRYPTODISK_DENIABLE_ITERATIONS 20000
+#define GRUB_CRYPTODISK_DENIABLE_KEYSIZE 32 // Key size in BYTES (default: 256/8). Do x2 for XTS (default: AES128).
+#define GRUB_CRYPTODISK_DENIABLE_AF_STRIPES 4000 // KEYSIZE*AF_STRIPES must be a factor of SECTOR_SIZE (512bytes).
+#define GRUB_CRYPTODISK_DENIABLE_ITERATIONS 32768
 
 struct grub_cryptodisk;
 
@@ -130,14 +130,14 @@ struct grub_cryptodisk_dev
 			     int boot_only, grub_file_t hdr);
   grub_err_t (*recover_key) (grub_disk_t disk, grub_cryptodisk_t dev,
 			    grub_file_t hdr, grub_uint8_t *key, grub_size_t keyfile_size);
-  grub_cryptodisk_t (*scan_deluks) (grub_disk_t disk,
-          grub_disk_addr_t start_sector, const char *check_uuid,
-          int check_boot, grub_file_t hdr);
-  grub_err_t (*recover_key_deluks) (grub_disk_t source,
-          grub_disk_addr_t start_sector, grub_cryptodisk_t dev,
-          grub_file_t hdr, grub_uint8_t *keyfile_bytes,
-          grub_size_t keyfile_bytes_size,
-          char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE]);
+  grub_cryptodisk_t (*scan_recover_deluks) (grub_disk_t source,
+                    grub_disk_addr_t start_sector,
+                    const char *check_uuid __attribute__ ((unused)),
+                    int check_boot,
+                    grub_file_t hdr,
+                    grub_uint8_t *keyfile_bytes,
+                    grub_size_t keyfile_bytes_size,
+                    char (*interactive_passphrase)[GRUB_CRYPTODISK_MAX_PASSPHRASE]);
 };
 typedef struct grub_cryptodisk_dev *grub_cryptodisk_dev_t;
 
@@ -187,6 +187,9 @@ grub_cryptodisk_t grub_cryptodisk_get_by_source_disk (grub_disk_t disk);
 
 grub_cryptodisk_t grub_cryptodisk_create (grub_disk_t disk, char *uuid,
 				   char *ciphername, char *ciphermode, char *digest);
+
+void
+cryptodisk_close (grub_cryptodisk_t dev);
 
 int
 grub_cryptodisk_uuidcmp(const char *uuid_a, const char *uuid_b);
