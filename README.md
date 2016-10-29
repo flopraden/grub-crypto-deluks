@@ -1,41 +1,88 @@
 # Introduction
 
-
-
 [![DeLUKS: Deniable Linux Unified Key Setup](https://raw.githubusercontent.com/kriswebdev/grub-crypto-deluks/gh-pages/assets/deluks_logo.png)](https://github.com/kriswebdev/grub-crypto-deluks)
 
-This repo development branch is a work in progress to specify a Deniable LUKS header and implement it in **GRUB Cryptomount**.
+This repository presents an implementation of a plausibly Deniable LUKS header in **`grub`**.
 
-DeLUKS will provide most benefits of LUKS and of plausibly [deniable encryption](https://en.wikipedia.org/wiki/Deniable_encryption).
+DeLUKS provides most benefits of LUKS and of plausibly [deniable encryption](https://en.wikipedia.org/wiki/Deniable_encryption). The DeUKS header is specified to be indistinguishible from random data. This is like Truecrypt header, but with **GRUB support**, **multiple keyslots** and *(to be implemented)* an **evolutive protection against brute-forcing**.
 
-Note there is a parrallel project to implement DeLUKS in Cryptsetup: [cryptsetup-deluks](https://github.com/kriswebdev/cryptsetup-deluks).
+Note there is a parrallel project to implement DeLUKS in `cryptsetup`: [`cryptsetup-deluks`](https://github.com/kriswebdev/cryptsetup-deluks). This must be installed in the booted OS.
 
-Expected Features
+See the [`cryptsetup-deluks` Wiki: System encryption](https://github.com/kriswebdev/cryptsetup-deluks/wiki/System-encryption) for instructions.
+
+Beta available!
 ===
-- **QUICK BOOT!** At GRUB menu, press `c` to get into GRUB shell, then `cryptomount -x` and your password. That's all!
-- **DENIABLE!**
-  - DeLUKS header and encrypted payload are **indistinguishable from random data**. *"Why is there random data on your unallocated disk space? - I wiped my disk"*
-  - Bootloader is nothing more than **GRUB**. If the code is integrated upstream, the setup will even be indistinguishable from mainstream GRUB *"Why do you have a bootloader with deniable decryption feature? - Do I? It's the default GRUB."*
-  - **No bootloader password menu**. Base of deny, YOU command the bootloader to ask you for a password, not the other way round. *"Look, I just installed this O.S. on my wiped drive, it's GRUB's only menu choice. Where would I hide something?"*
-  - DeLUKS finds encrypted disks by **scanning** & trying to mount all unallocated disk space > 2MiB.
-  - **No poorly secured USB key** needed! But use one if you really want to. *"We didn't find any (1) remote header (2) unencrypted keyfile (3) loosely brute-forcable plain dm-crypt keyfile (choose one) on your USB key."*
-- LUKS **multiple keyslots**: You can decrypt a disk with any one of 8 passwords. You can change and revok the passwords.
-- LUKS protection **against rainbow table** attacks: Master key is encrypted with a salt.
-- LUKS **slow brute-forcing**: User password is encrypted with several hash iterations and a salt.
-- LUKS **anti-forensic** information splitter: Low risk that the master key could be decrypted with a revoked password (protection against damaged disk blocks storing the revoked keyslot).
-- **Pure dm-crypt**, no TrueCrypt.
-- **No need for Truecrypt-style "hidden partition"**. Instead, you can create a true partition with a fake O.S. GRUB will by default boot on this fake O.S.
 
-Theoretical limitations and workarounds
+`grub-crypto-deluks` is leaving the Alpha stage and is now on Beta stage.
+
+Instructions are written for and tested on **Ubuntu 16** (Xenial Xerus).
+
+Install
 ===
-It is difficult to write the header encryption parameters on disk without compromising deniability character or security.
-Therefore the Master key / keyslots encryption parameters should use DeLUKS default presets of the installed GRUB version (or be provided through command-line arguments at each boot as an annoying last resort).
 
-However, default presets hard-coded in GRUB-cryptomount shall regularly evolve to follow security best practices.
-Hence, once GRUB is updated with newer DeLUKS default presets, it shall behave according to this procedure:
-- GRUB-cryptomount will try to decrypt the disks using the latests presets.
-- If GRUB-cryptomount fails to decrypt any disk, it will try with older presets.
-- If GRUB-cryptomount succeds to decrypt any disk with older presets, it shall warn the user to re-create the DeLUKS header with newer presets using cryptsetup. And continue booting.
+    sudo apt-get install git build-essential bison gettext binutils flex libdevmapper-dev ttf-unifont ttf-dejavu libfreetype6-dev qemu-system-i386 xorriso python autoconf automake liblzma5 liblzma-dev libfuse2 libfuse-dev
+    git clone --depth=1 https://github.com/kriswebdev/grub-crypto-deluks.git
+    cd grub-crypto-deluks
+    make clean
+    ./linguas.sh
+    ./autogen.sh
+    ./configure --prefix=/usr --exec_prefix=/usr --sysconfdir=/etc 
+    make
+    sudo make install
 
-The disk payload encryption settings can be changed as these options are encrypted.
-If GRUB-cryptomount detects the disk payload encryption settings to be obsolete, it shall warn the user to re-create the DeLUKS header and to re-encrypt the drive with newer presets using cryptsetup. And continue booting.
+Install GRUB on the drive root where it is already present, DON'T overwrite the DeLUKS encrypted space!
+
+	sudo lsblk -o NAME,FSTYPE,SIZE,LABEL,MOUNTPOINT
+	sudo grub-install /dev/sdX
+
+Optional for international keyboards (eg. *fr*ench):
+
+	sudo grub-kbdcomp -o /boot/grub/keyboard.gkb fr
+
+Edit `/etc/default/grub` with root rights to have:
+
+    # International keyboards:
+    #GRUB_HIDDEN_TIMEOUT=0
+    GRUB_TERMINAL_INPUT="at_keyboard"
+    GRUB_ENABLE_CRYPTODISK=y
+    GRUB_PRELOAD_MODULES="luks cryptodisk keylayouts"
+
+Edit `/etc/grub.d/40_custom` with root rights to have:
+
+    #!/bin/sh
+    exec tail -n +3 $0
+
+    # International keyboards:
+    insmod keylayouts
+    keymap /boot/grub/keyboard.gkb
+
+
+Finally:
+
+    sudo update-grub
+
+Reboot
+
+Run
+===
+
+At GRUB menu, press `c` to get into GRUB shell.
+
+> If you don't see GRUB menu because you didn't comment `GRUB_HIDDEN_TIMEOUT`, press and hold `⇧` (SHIFT) during boot (english keyboard only).
+
+At GRUB shell: 
+
+    cryptomount -x /
+    # Type your password
+    # If needed: ls
+    set root=(crypto0,msdos2)
+    configfile /boot/grub/grub.cfg
+
+Boot process will be even quicker in future versions.
+
+The real OS now boots.
+
+DeLUKS Features, Specifications...
+===
+
+Check [`cryptsetup-deluks`](https://github.com/kriswebdev/cryptsetup-deluks) README.
