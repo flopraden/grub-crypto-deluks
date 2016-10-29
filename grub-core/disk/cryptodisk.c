@@ -1007,8 +1007,8 @@ grub_cryptodisk_mount_device_deluks (const char *name, grub_disk_t source, grub_
   //  return GRUB_ERR_NONE;
 
   // Display with "set debug=cryptodisk" from GRUB shell
-  grub_printf_ (N_(" mount_device_deluks( name %s, ..., start_sector %llu, pwd %s)\n"),
-        name, (unsigned long long) start_sector, (char *) interactive_passphrase);
+  grub_printf_ (N_(" mount_device_deluks( name %s, ..., start_sector %llu)\n"), // , pwd %s
+        name, (unsigned long long) start_sector); // , (char *) interactive_passphrase
 
   dev = grub_cryptodisk_get_by_source_disk (source);
 
