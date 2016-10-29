@@ -610,7 +610,7 @@ scan_recover_deluks (grub_disk_t source,
 
           /*  !!!!!!!!!!! TODO !!!!!!!!!
               Header encryption settings are stored in the cryptodevice struct.
-              They will be replaced by the payload encryption seetings.
+              They will be replaced by the payload encryption settings.
 
         
           Decipher options encrypted header. We need:
@@ -649,7 +649,8 @@ scan_recover_deluks (grub_disk_t source,
 
           /* Create the final device */
           dev = grub_cryptodisk_create (source, uuid, ciphername, ciphermode, hashspec);
-          dev->offset = 4096; // Temporary until we decrypt the header
+          // dev->offset = 4096; // Temporary until we decrypt the header
+          dev->offset = header_deluks.options.payloadOffset; // TODO: Check that we are not out of disk boundary
           dev->modname = "luks";
 
           /* Set the master key.  */
